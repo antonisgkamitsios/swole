@@ -208,7 +208,6 @@ func TestStartExperiment(t *testing.T) {
 		manager.StartExperiment("second_experiment", w, r)
 		cookieValue = getExperimentCookieValue(t, w)
 		fmt.Printf("cookieVal %+v\n", cookieValue)
-
 	})
 }
 
