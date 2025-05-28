@@ -70,6 +70,13 @@ func (m *ExperimentManager) RegisterExperiment(experiment Experiment) error {
 	}
 
 	for i := range experiment.Alternatives {
+		if experiment.Alternatives[i].Weight < 0 {
+			panic(&InvalidExperimentError{
+				message: "weights must be positive",
+				key:     key,
+			})
+		}
+
 		if experiment.Alternatives[i].Weight == 0 {
 			experiment.Alternatives[i].Weight = 1
 		}

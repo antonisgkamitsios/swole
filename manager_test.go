@@ -17,7 +17,8 @@ func TestRegisterExperiment(t *testing.T) {
 		wantPanic   bool
 		isDuplicate bool
 	}{
-		{name: "Empty key",
+		{
+			name: "Empty key",
 			experiment: Experiment{
 				Alternatives: Alternatives{
 					{
@@ -30,13 +31,15 @@ func TestRegisterExperiment(t *testing.T) {
 			},
 			wantPanic: true,
 		},
-		{name: "Empty alternatives",
+		{
+			name: "Empty alternatives",
 			experiment: Experiment{
 				Key: "Test key",
 			},
 			wantPanic: true,
 		},
-		{name: "Duplicate alternatives",
+		{
+			name: "Duplicate alternatives",
 			experiment: Experiment{
 				Key: "Test key",
 				Alternatives: Alternatives{
@@ -52,7 +55,8 @@ func TestRegisterExperiment(t *testing.T) {
 			},
 			wantPanic: true,
 		},
-		{name: "Duplicate experiment",
+		{
+			name: "Duplicate experiment",
 			experiment: Experiment{
 				Key: "Test key",
 				Alternatives: Alternatives{
@@ -67,7 +71,24 @@ func TestRegisterExperiment(t *testing.T) {
 			wantPanic:   true,
 			isDuplicate: true,
 		},
-		{name: "Valid experiment",
+		{
+			name: "Negative weights",
+			experiment: Experiment{
+				Key: "Test key",
+				Alternatives: Alternatives{
+					{
+						Name:   "control",
+						Weight: -1,
+					},
+					{
+						Name: "variant",
+					},
+				},
+			},
+			wantPanic: true,
+		},
+		{
+			name: "Valid experiment",
 			experiment: Experiment{
 				Key: "Test key",
 				Alternatives: Alternatives{
