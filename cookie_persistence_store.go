@@ -10,16 +10,16 @@ type CookiePersistenceStore struct {
 	cookieName string
 }
 
-func NewCookiePersistenceStore(cookieName string) *CookiePersistenceStore {
+func NewCookiePersistenceStore() *CookiePersistenceStore {
 	return &CookiePersistenceStore{
-		cookieName: cookieName,
+		cookieName: "swole",
 	}
 }
 
 // generateCookie creates a cookie based on a value
 func (s *CookiePersistenceStore) generateCookie(value string) http.Cookie {
 	return http.Cookie{
-		Name:     cookieName, // this should come from config
+		Name:     s.cookieName, // this should come from config
 		Value:    value,
 		Path:     "/",
 		MaxAge:   60 * 60 * 24, // one day todo: this should come from config
@@ -35,142 +35,107 @@ func (s *CookiePersistenceStore) writeCookie(w http.ResponseWriter, value string
 	return writeCookie(w, cookie)
 }
 
-func (s *CookiePersistenceStore) writeFreshCookie(w http.ResponseWriter, e Experiment) (*StartExperimentResponse, error) {
-	alternative := e.chooseAlternative()
-	value, err := e.generateCookieValue(alternative)
-	if err != nil {
-		return nil, err
-	}
-
-	cookie := s.generateCookie(value)
-
-	err = writeCookie(w, cookie)
-	if err != nil {
-		return nil, err
-	}
-
-	return &StartExperimentResponse{
-		Alternative:       alternative,
-		DidStart:          true,
-		DidStartFirstTime: true,
-	}, nil
-}
-func (s *CookiePersistenceStore) StartExperiment(experiment Experiment, w http.ResponseWriter, r *http.Request) (*StartExperimentResponse, error) {
-
-	key := experiment.Key
-	cookie, err := readCookie(r, cookieName)
-	// we didn't find cookie so we should write our own
+func (s *CookiePersistenceStore) ExperimentExists(experiment Experiment, w http.ResponseWriter, r *http.Request) (bool, string, error) {
+	cookie, err := readCookie(r, s.cookieName)
+	// we didn't find cookie therefore experiment does not exist
 	if errors.Is(err, http.ErrNoCookie) {
-		return s.writeFreshCookie(w, experiment)
+		return false, "", nil
 	}
-
 	if err != nil {
-		return nil, err
+		return false, "", err
 	}
 
+	// we need to check cookie to see if our experiment is in there
 	// {"experiment_name": "control", "experiment_name:finished": "true"}
 	var parsedCookieValue map[string]string
-
 	err = json.Unmarshal([]byte(cookie.Value), &parsedCookieValue)
 	if err != nil {
-		return nil, err
+		return false, "", err
 	}
 
-	storedExperimentAlternative, ok := parsedCookieValue[key]
-	// we found the experiment stored in the cookies, we should resend the cookie to refresh it
-	if ok {
-		err = s.writeCookie(w, cookie.Value)
+	key := experiment.Key
+	alternative, found := parsedCookieValue[key]
+	if found {
+		return true, alternative, nil
+	}
+
+	return false, "", nil
+}
+
+func (s *CookiePersistenceStore) PersistExperiment(experiment Experiment, w http.ResponseWriter, r *http.Request) (alternative string, err error) {
+	cookieExists := true
+	cookie, err := readCookie(r, s.cookieName)
+	// we didn't find cookie therefore experiment does not exist
+	if errors.Is(err, http.ErrNoCookie) {
+		cookieExists = false
+	} else if err != nil {
+		return "", err
+	}
+
+	alternative = experiment.chooseAlternative()
+	parsedCookieValue := make(map[string]string)
+
+	if cookieExists {
+		err = json.Unmarshal([]byte(cookie.Value), &parsedCookieValue)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
-
-		return &StartExperimentResponse{
-			Alternative:       storedExperimentAlternative,
-			DidStart:          true,
-			DidStartFirstTime: false,
-		}, nil
 	}
 
-	// there is a cookie but the experiment is not stored
-	// we should append to the existing values our experiment
-	variant := experiment.chooseAlternative()
-	parsedCookieValue[key] = variant
+	parsedCookieValue[experiment.Key] = alternative
 	newValue, err := json.Marshal(&parsedCookieValue)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	err = s.writeCookie(w, string(newValue))
 	if err != nil {
-		return nil, err
+		return "", nil
 	}
 
-	return &StartExperimentResponse{
-		Alternative:       variant,
-		DidStart:          true,
-		DidStartFirstTime: true,
-	}, nil
+	return alternative, nil
 }
-func (s *CookiePersistenceStore) FinishExperiment(experiment Experiment, w http.ResponseWriter, r *http.Request) (*FinishExperimentResponse, error) {
-	key := experiment.Key
 
-	cookie, err := readCookie(r, cookieName)
-	// we didn't find the cookie so we shouldn't finish it
-	if errors.Is(err, http.ErrNoCookie) {
-		return &FinishExperimentResponse{
-			Alternative:        experiment.getFirstAlternative(),
-			DidFinish:          false,
-			DidFinishFirstTime: false,
-		}, nil
-	}
+func (s *CookiePersistenceStore) RefreshTtl(experiment Experiment, w http.ResponseWriter, r *http.Request) error {
+
+	cookie, err := readCookie(r, s.cookieName)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	// {"experiment_name": "control", "experiment_name:finished": "true"}
+	err = s.writeCookie(w, cookie.Value)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *CookiePersistenceStore) ExperimentFinish(experiment Experiment, w http.ResponseWriter, r *http.Request) (finishFirstTime bool, err error) {
+	cookie, err := readCookie(r, s.cookieName)
+	if err != nil {
+		return false, err
+	}
+
 	var parsedCookieValue map[string]string
 	err = json.Unmarshal([]byte(cookie.Value), &parsedCookieValue)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 
-	storedExpAlt, ok := parsedCookieValue[key]
-	// the experiment key is not present we cannot finish it
-	if !ok {
-		return &FinishExperimentResponse{
-			Alternative:        experiment.getFirstAlternative(),
-			DidFinish:          false,
-			DidFinishFirstTime: false,
-		}, nil
-	}
+	finishedKey := experiment.Key + ":finished"
+	_, found := parsedCookieValue[finishedKey]
 
-	// find if the key:finished is present
-	finishedKey := key + ":finished"
-	_, ok = parsedCookieValue[finishedKey]
-	// the experiment is already finished, we don't want to finish it again
-	if ok {
-		return &FinishExperimentResponse{
-			Alternative:        storedExpAlt,
-			DidFinish:          true,
-			DidFinishFirstTime: false,
-		}, nil
-	}
-
-	// We are ready to finish the experiment
 	parsedCookieValue[finishedKey] = "true"
+
 	newValue, err := json.Marshal(&parsedCookieValue)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 
 	err = s.writeCookie(w, string(newValue))
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 
-	return &FinishExperimentResponse{
-		Alternative:        storedExpAlt,
-		DidFinish:          true,
-		DidFinishFirstTime: true,
-	}, nil
-
+	// if the finished key was not found this means it is the first time we're finishing it
+	return !found, nil
 }

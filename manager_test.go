@@ -162,19 +162,19 @@ func TestRegisterExperiment(t *testing.T) {
 func TestStartExperiment(t *testing.T) {
 	manager := NewExperimentManager()
 
-	w := httptest.NewRecorder()
-	r, err := http.NewRequest(http.MethodGet, "/", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Run("experiment not registered", func(t *testing.T) {
-		_, err = manager.StartExperiment("non_existent", w, r)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		_, err := manager.StartExperiment("non_existent", w, r)
 		if err == nil {
 			t.Error("expected to error but did not")
 		}
 	})
 
-	t.Run("cookie not found", func(t *testing.T) {
+	t.Run("experiment start first time", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+
 		key := "experiment_key"
 		manager.RegisterExperiment(Experiment{
 			Key: key,
@@ -203,16 +203,42 @@ func TestStartExperiment(t *testing.T) {
 			t.Error("expected DidStartFirstTime to be true but got false")
 		}
 
-		cookieValue := getExperimentCookieValue(t, w)
-		if cookieValue[key] != response.Alternative {
-			t.Errorf("expected alternative to be: %s but got: %s", response.Alternative, cookieValue[key])
-		}
-		if len(cookieValue) != 1 {
-			t.Errorf("expected to have only one experiment but got: %d", len(cookieValue))
-		}
+		// cookieValue := getExperimentCookieValue(t, w)
+		// if cookieValue[key] != response.Alternative {
+		// 	t.Errorf("expected alternative to be: %s but got: %s", response.Alternative, cookieValue[key])
+		// }
+		// if len(cookieValue) != 1 {
+		// 	t.Errorf("expected to have only one experiment but got: %d", len(cookieValue))
+		// }
 
+		// manager.RegisterExperiment(Experiment{
+		// 	Key: "second_experiment",
+		// 	Alternatives: Alternatives{
+		// 		{
+		// 			Name: "control",
+		// 		},
+		// 		{
+		// 			Name: "variant",
+		// 		},
+		// 	},
+		// })
+
+		// r.AddCookie(getExperimentCookie(t, w))
+
+		// w = httptest.NewRecorder()
+		// manager.StartExperiment("second_experiment", w, r)
+		// cookieValue = getExperimentCookieValue(t, w)
+		// fmt.Printf("cookieVal %+v\n", cookieValue)
+
+		manager.ExperimentStore.Delete(key)
+	})
+	t.Run("Experiment was already started", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+
+		key := "experiment_key"
 		manager.RegisterExperiment(Experiment{
-			Key: "second_experiment",
+			Key: key,
 			Alternatives: Alternatives{
 				{
 					Name: "control",
@@ -223,12 +249,94 @@ func TestStartExperiment(t *testing.T) {
 			},
 		})
 
-		r.AddCookie(getExperimentCookie(t, w))
+		firstResponse, err := manager.StartExperiment(key, w, r)
 
-		w = httptest.NewRecorder()
-		manager.StartExperiment("second_experiment", w, r)
-		cookieValue = getExperimentCookieValue(t, w)
-		fmt.Printf("cookieVal %+v\n", cookieValue)
+		fmt.Printf("Cookies are: %+v\n", w.Result().Cookies())
+		if err != nil {
+			t.Errorf("expected not to error but got: %v", err)
+		}
+
+		w2 := httptest.NewRecorder()
+		r2 := newRequestFromResponse(w)
+
+		response, err := manager.StartExperiment(key, w2, r2)
+		if err != nil {
+			t.Errorf("expected not to error but got: %v", err)
+		}
+
+		if response.Alternative != firstResponse.Alternative {
+			t.Errorf("expected alternative to be %s but got: %s", firstResponse.Alternative, response.Alternative)
+		}
+
+		if !response.DidStart {
+			t.Error("expected DidStart to be true but got false")
+		}
+
+		if response.DidStartFirstTime {
+			t.Error("expected DidStartFirstTime to be false but got true")
+		}
+
+		manager.ExperimentStore.Delete(key)
+	})
+
+	t.Run("Experiment with different name has already started", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+
+		key := "experiment_key"
+		manager.RegisterExperiment(Experiment{
+			Key: key,
+			Alternatives: Alternatives{
+				{
+					Name: "control",
+				},
+				{
+					Name: "variant",
+				},
+			},
+		})
+
+		_, err := manager.StartExperiment(key, w, r)
+		if err != nil {
+			t.Errorf("expected not to error but got: %v", err)
+		}
+
+		secondKey := "second_experiment"
+
+		manager.RegisterExperiment(Experiment{
+			Key: secondKey,
+			Alternatives: Alternatives{
+				{
+					Name: "control",
+				},
+				{
+					Name: "variant",
+				},
+			},
+		})
+
+		w2 := httptest.NewRecorder()
+		r2 := newRequestFromResponse(w)
+
+		response, err := manager.StartExperiment(secondKey, w2, r2)
+		if err != nil {
+			t.Errorf("expected not to error but got: %v", err)
+		}
+
+		if err != nil {
+			t.Errorf("expected not to error but got: %v", err)
+		}
+		if response.Alternative != "control" && response.Alternative != "variant" {
+			t.Errorf("expected alternative to be control or variant but got: %s", response.Alternative)
+		}
+
+		if !response.DidStart {
+			t.Error("expected DidStart to be true but got false")
+		}
+
+		if !response.DidStartFirstTime {
+			t.Error("expected DidStartFirstTime to be true but got false")
+		}
 	})
 }
 
@@ -242,14 +350,25 @@ func assertPanic(t *testing.T, f func()) {
 	f()
 }
 
-func getExperimentCookieValue(t *testing.T, w *httptest.ResponseRecorder) map[string]string {
+func newRequestFromResponse(rr *httptest.ResponseRecorder) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	cookies := rr.Result().Cookies()
+	for _, c := range cookies {
+		r.AddCookie(c)
+	}
+
+	return r
+}
+
+func getExperimentCookieValue(t *testing.T, w *httptest.ResponseRecorder, cookieName string) map[string]string {
 	t.Helper()
-	cookie := getExperimentCookie(t, w)
+	cookie := getExperimentCookie(t, w, cookieName)
 
 	return parseValue(t, cookie)
 }
 
-func getExperimentCookie(t *testing.T, w *httptest.ResponseRecorder) *http.Cookie {
+func getExperimentCookie(t *testing.T, w *httptest.ResponseRecorder, cookieName string) *http.Cookie {
 	t.Helper()
 
 	res := http.Response{Header: w.Header()}

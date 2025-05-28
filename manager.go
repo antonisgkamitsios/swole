@@ -4,8 +4,6 @@ import (
 	"net/http"
 )
 
-const cookieName = "swole"
-
 type ExperimentManager struct {
 	ExperimentStore  ExperimentStore
 	PersistenceStore PersistenceStore
@@ -14,7 +12,7 @@ type ExperimentManager struct {
 func NewExperimentManager() *ExperimentManager {
 	return &ExperimentManager{
 		ExperimentStore:  NewMemoryExperimentStore(),
-		PersistenceStore: NewCookiePersistenceStore(cookieName),
+		PersistenceStore: NewCookiePersistenceStore(),
 	}
 }
 
@@ -91,7 +89,33 @@ func (m *ExperimentManager) StartExperiment(key string, w http.ResponseWriter, r
 		return nil, err
 	}
 
-	return m.PersistenceStore.StartExperiment(experiment, w, r)
+	exists, alternative, err := m.PersistenceStore.ExperimentExists(experiment, w, r)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		alternative, err := m.PersistenceStore.PersistExperiment(experiment, w, r)
+		if err != nil {
+			return nil, err
+		}
+		return &StartExperimentResponse{
+			Alternative:       alternative,
+			DidStart:          true,
+			DidStartFirstTime: true,
+		}, nil
+	}
+
+	// here experiment exists
+	err = m.PersistenceStore.RefreshTtl(experiment, w, r)
+	if err != nil {
+		return nil, err
+	}
+
+	return &StartExperimentResponse{
+		Alternative:       alternative,
+		DidStart:          true,
+		DidStartFirstTime: false,
+	}, nil
 }
 
 func (m *ExperimentManager) FinishExperiment(key string, w http.ResponseWriter, r *http.Request) (*FinishExperimentResponse, error) {
@@ -99,6 +123,29 @@ func (m *ExperimentManager) FinishExperiment(key string, w http.ResponseWriter, 
 	if err != nil {
 		return nil, err
 	}
+	exists, alternative, err := m.PersistenceStore.ExperimentExists(experiment, w, r)
+	if err != nil {
+		return nil, err
+	}
 
-	return m.PersistenceStore.FinishExperiment(experiment, w, r)
+	// experiment does not exist therefore we shouldn't finish it
+	if !exists {
+		return &FinishExperimentResponse{
+			Alternative:        experiment.getFirstAlternative(),
+			DidFinish:          false,
+			DidFinishFirstTime: false,
+		}, nil
+	}
+
+	finishFirstTime, err := m.PersistenceStore.ExperimentFinish(experiment, w, r)
+	if err != nil {
+		return nil, err
+	}
+
+	return &FinishExperimentResponse{
+		Alternative:        alternative,
+		DidFinish:          true,
+		DidFinishFirstTime: finishFirstTime,
+	}, nil
+
 }
