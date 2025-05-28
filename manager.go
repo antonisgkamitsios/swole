@@ -9,12 +9,12 @@ import (
 const cookieName = "swole"
 
 type ExperimentManager struct {
-	activeExperiments map[string]Experiment
+	ExperimentStore ExperimentStore
 }
 
 func NewExperimentManager() *ExperimentManager {
 	return &ExperimentManager{
-		activeExperiments: make(map[string]Experiment),
+		ExperimentStore: NewMemoryExperimentStore(),
 	}
 }
 
@@ -59,7 +59,11 @@ func (m *ExperimentManager) writeFreshCookie(w http.ResponseWriter, e Experiment
 }
 
 func (g *ExperimentManager) getExperiment(key string) (Experiment, error) {
-	experiment, ok := g.activeExperiments[key]
+	experiment, ok, err := g.ExperimentStore.Get(key)
+	if err != nil {
+		return Experiment{}, err
+	}
+
 	if !ok {
 		return experiment, &ExperimentNotFoundError{
 			message: "you should register it first via `RegisterExperiment`",
@@ -70,7 +74,7 @@ func (g *ExperimentManager) getExperiment(key string) (Experiment, error) {
 	return experiment, nil
 }
 
-func (m *ExperimentManager) RegisterExperiment(experiment Experiment) {
+func (m *ExperimentManager) RegisterExperiment(experiment Experiment) error {
 	key := experiment.Key
 
 	if len(key) == 0 {
@@ -80,7 +84,11 @@ func (m *ExperimentManager) RegisterExperiment(experiment Experiment) {
 		})
 	}
 
-	if _, found := m.activeExperiments[key]; found {
+	_, found, err := m.ExperimentStore.Get(key)
+	if err != nil {
+		return err
+	}
+	if found {
 		panic(&InvalidExperimentError{
 			message: "each experiment must be registered only once",
 			key:     key,
@@ -107,7 +115,7 @@ func (m *ExperimentManager) RegisterExperiment(experiment Experiment) {
 		}
 	}
 
-	m.activeExperiments[key] = experiment
+	return m.ExperimentStore.Set(key, experiment)
 }
 
 func (m *ExperimentManager) StartExperiment(key string, w http.ResponseWriter, r *http.Request) (*StartExperimentResponse, error) {
