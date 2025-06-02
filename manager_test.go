@@ -132,9 +132,9 @@ func TestRegisterExperiment(t *testing.T) {
 				})
 			} else {
 				manager.RegisterExperiment(tt.experiment)
-				createdExperiment, err := manager.getExperiment(tt.experiment.Key)
-				if err != nil {
-					t.Fatal(err)
+				createdExperiment, found := manager.getExperiment(tt.experiment.Key)
+				if !found {
+					t.Error("Expected experiment to exist in memory but it wasn't found")
 				}
 				for i, alt := range createdExperiment.Alternatives {
 					if tt.experiment.Alternatives[i].Name != alt.Name {
@@ -160,11 +160,11 @@ func TestRegisterExperiment(t *testing.T) {
 }
 
 func TestStartExperiment(t *testing.T) {
-	manager := NewExperimentManager()
-
 	t.Run("experiment not registered", func(t *testing.T) {
+		manager := NewExperimentManager()
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
+
 		_, err := manager.StartExperiment("non_existent", w, r)
 		if err == nil {
 			t.Error("expected to error but did not")
@@ -172,6 +172,7 @@ func TestStartExperiment(t *testing.T) {
 	})
 
 	t.Run("experiment start first time", func(t *testing.T) {
+		manager := NewExperimentManager()
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 
@@ -187,10 +188,12 @@ func TestStartExperiment(t *testing.T) {
 				},
 			},
 		})
+
 		response, err := manager.StartExperiment(key, w, r)
 		if err != nil {
 			t.Errorf("expected not to error but got: %v", err)
 		}
+
 		if response.Alternative != "control" && response.Alternative != "variant" {
 			t.Errorf("expected alternative to be control or variant but got: %s", response.Alternative)
 		}
@@ -230,9 +233,9 @@ func TestStartExperiment(t *testing.T) {
 		// cookieValue = getExperimentCookieValue(t, w)
 		// fmt.Printf("cookieVal %+v\n", cookieValue)
 
-		manager.ExperimentStore.Delete(key)
 	})
 	t.Run("Experiment was already started", func(t *testing.T) {
+		manager := NewExperimentManager()
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 
@@ -276,10 +279,10 @@ func TestStartExperiment(t *testing.T) {
 			t.Error("expected DidStartFirstTime to be false but got true")
 		}
 
-		manager.ExperimentStore.Delete(key)
 	})
 
 	t.Run("Experiment with different name has already started", func(t *testing.T) {
+		manager := NewExperimentManager()
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 

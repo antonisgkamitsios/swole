@@ -1,35 +1,32 @@
 package swole
 
 import (
+	"maps"
 	"net/http"
 )
 
+type RegisteredExperiments map[string]Experiment
 type ExperimentManager struct {
-	ExperimentStore  ExperimentStore
+	registeredExperiments RegisteredExperiments
+	// ExperimentStore  ExperimentStore
 	PersistenceStore PersistenceStore
+}
+
+func (m *ExperimentManager) getExperiment(key string) (Experiment, bool) {
+	experiment, ok := m.registeredExperiments[key]
+
+	return experiment, ok
 }
 
 func NewExperimentManager() *ExperimentManager {
 	return &ExperimentManager{
-		ExperimentStore:  NewMemoryExperimentStore(),
+		registeredExperiments: make(RegisteredExperiments),
+		// ExperimentStore:  NewMemoryExperimentStore(),
 		PersistenceStore: NewCookiePersistenceStore(),
 	}
 }
-
-func (m *ExperimentManager) getExperiment(key string) (Experiment, error) {
-	experiment, ok, err := m.ExperimentStore.Get(key)
-	if err != nil {
-		return Experiment{}, err
-	}
-
-	if !ok {
-		return experiment, &ExperimentNotFoundError{
-			message: "you should register it first via `RegisterExperiment`",
-			key:     key,
-		}
-	}
-
-	return experiment, nil
+func (m *ExperimentManager) GetRegisterExperiments() RegisteredExperiments {
+	return maps.Clone(m.registeredExperiments)
 }
 
 func (m *ExperimentManager) RegisterExperiment(experiment Experiment) error {
@@ -42,10 +39,7 @@ func (m *ExperimentManager) RegisterExperiment(experiment Experiment) error {
 		})
 	}
 
-	_, found, err := m.ExperimentStore.Get(key)
-	if err != nil {
-		return err
-	}
+	_, found := m.getExperiment(key)
 	if found {
 		panic(&InvalidExperimentError{
 			message: "each experiment must be registered only once",
@@ -80,21 +74,27 @@ func (m *ExperimentManager) RegisterExperiment(experiment Experiment) error {
 		}
 	}
 
-	return m.ExperimentStore.Set(key, experiment)
+	m.registeredExperiments[key] = experiment
+
+	return nil
 }
 
 func (m *ExperimentManager) StartExperiment(key string, w http.ResponseWriter, r *http.Request) (*StartExperimentResponse, error) {
-	experiment, err := m.getExperiment(key)
-	if err != nil {
-		return nil, err
+	experiment, found := m.getExperiment(key)
+	if !found {
+		return nil, &ExperimentNotFoundError{
+			key:     key,
+			message: "StartExperiment failed, make sure you called `RegisterExperiment` first",
+		}
 	}
 
-	exists, alternative, err := m.PersistenceStore.ExperimentExists(experiment, w, r)
+	exists, alternative, err := m.PersistenceStore.ExperimentExists(key, w, r)
 	if err != nil {
 		return nil, err
 	}
 	if !exists {
-		alternative, err := m.PersistenceStore.PersistExperiment(experiment, w, r)
+		alternative = experiment.chooseAlternative()
+		err = m.PersistenceStore.PersistExperiment(key, alternative, w, r)
 		if err != nil {
 			return nil, err
 		}
@@ -106,7 +106,7 @@ func (m *ExperimentManager) StartExperiment(key string, w http.ResponseWriter, r
 	}
 
 	// here experiment exists
-	err = m.PersistenceStore.RefreshTtl(experiment, w, r)
+	err = m.PersistenceStore.RefreshTtl(w, r)
 	if err != nil {
 		return nil, err
 	}
@@ -119,11 +119,14 @@ func (m *ExperimentManager) StartExperiment(key string, w http.ResponseWriter, r
 }
 
 func (m *ExperimentManager) FinishExperiment(key string, w http.ResponseWriter, r *http.Request) (*FinishExperimentResponse, error) {
-	experiment, err := m.getExperiment(key)
-	if err != nil {
-		return nil, err
+	experiment, found := m.getExperiment(key)
+	if !found {
+		return nil, &ExperimentNotFoundError{
+			key:     key,
+			message: "FinishExperiment failed, make sure you called `RegisterExperiment` first",
+		}
 	}
-	exists, alternative, err := m.PersistenceStore.ExperimentExists(experiment, w, r)
+	exists, alternative, err := m.PersistenceStore.ExperimentExists(key, w, r)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +140,7 @@ func (m *ExperimentManager) FinishExperiment(key string, w http.ResponseWriter, 
 		}, nil
 	}
 
-	finishFirstTime, err := m.PersistenceStore.ExperimentFinish(experiment, w, r)
+	finishFirstTime, err := m.PersistenceStore.ExperimentFinish(key, w, r)
 	if err != nil {
 		return nil, err
 	}
