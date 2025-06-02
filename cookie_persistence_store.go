@@ -6,23 +6,25 @@ import (
 	"net/http"
 )
 
+const cookieName = "swole"
+
 type CookiePersistenceStore struct {
-	cookieName string
+	MaxAge int
 }
 
 func NewCookiePersistenceStore() *CookiePersistenceStore {
 	return &CookiePersistenceStore{
-		cookieName: "swole",
+		MaxAge: 60 * 60 * 24, // one day,
 	}
 }
 
 // generateCookie creates a cookie based on a value
 func (s *CookiePersistenceStore) generateCookie(value string) http.Cookie {
 	return http.Cookie{
-		Name:     s.cookieName, // this should come from config
+		Name:     cookieName,
 		Value:    value,
 		Path:     "/",
-		MaxAge:   60 * 60 * 24, // one day todo: this should come from config
+		MaxAge:   s.MaxAge,
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
@@ -35,8 +37,8 @@ func (s *CookiePersistenceStore) writeCookie(w http.ResponseWriter, value string
 	return writeCookie(w, cookie)
 }
 
-func (s *CookiePersistenceStore) ExperimentExists(experiment Experiment, w http.ResponseWriter, r *http.Request) (bool, string, error) {
-	cookie, err := readCookie(r, s.cookieName)
+func (s *CookiePersistenceStore) ExperimentExists(key string, w http.ResponseWriter, r *http.Request) (bool, string, error) {
+	cookie, err := readCookie(r, cookieName)
 	// we didn't find cookie therefore experiment does not exist
 	if errors.Is(err, http.ErrNoCookie) {
 		return false, "", nil
@@ -53,7 +55,6 @@ func (s *CookiePersistenceStore) ExperimentExists(experiment Experiment, w http.
 		return false, "", err
 	}
 
-	key := experiment.Key
 	alternative, found := parsedCookieValue[key]
 	if found {
 		return true, alternative, nil
@@ -62,42 +63,41 @@ func (s *CookiePersistenceStore) ExperimentExists(experiment Experiment, w http.
 	return false, "", nil
 }
 
-func (s *CookiePersistenceStore) PersistExperiment(experiment Experiment, w http.ResponseWriter, r *http.Request) (alternative string, err error) {
+func (s *CookiePersistenceStore) PersistExperiment(key, alternative string, w http.ResponseWriter, r *http.Request) (err error) {
 	cookieExists := true
-	cookie, err := readCookie(r, s.cookieName)
+	cookie, err := readCookie(r, cookieName)
 	// we didn't find cookie therefore experiment does not exist
 	if errors.Is(err, http.ErrNoCookie) {
 		cookieExists = false
 	} else if err != nil {
-		return "", err
+		return err
 	}
 
-	alternative = experiment.chooseAlternative()
 	parsedCookieValue := make(map[string]string)
 
 	if cookieExists {
 		err = json.Unmarshal([]byte(cookie.Value), &parsedCookieValue)
 		if err != nil {
-			return "", err
+			return err
 		}
 	}
 
-	parsedCookieValue[experiment.Key] = alternative
+	parsedCookieValue[key] = alternative
 	newValue, err := json.Marshal(&parsedCookieValue)
 	if err != nil {
-		return "", err
+		return err
 	}
 	err = s.writeCookie(w, string(newValue))
 	if err != nil {
-		return "", nil
+		return nil
 	}
 
-	return alternative, nil
+	return nil
 }
 
-func (s *CookiePersistenceStore) RefreshTtl(experiment Experiment, w http.ResponseWriter, r *http.Request) error {
+func (s *CookiePersistenceStore) RefreshTtl(w http.ResponseWriter, r *http.Request) error {
 
-	cookie, err := readCookie(r, s.cookieName)
+	cookie, err := readCookie(r, cookieName)
 	if err != nil {
 		return err
 	}
@@ -109,8 +109,8 @@ func (s *CookiePersistenceStore) RefreshTtl(experiment Experiment, w http.Respon
 	return nil
 }
 
-func (s *CookiePersistenceStore) ExperimentFinish(experiment Experiment, w http.ResponseWriter, r *http.Request) (finishFirstTime bool, err error) {
-	cookie, err := readCookie(r, s.cookieName)
+func (s *CookiePersistenceStore) ExperimentFinish(key string, w http.ResponseWriter, r *http.Request) (finishFirstTime bool, err error) {
+	cookie, err := readCookie(r, cookieName)
 	if err != nil {
 		return false, err
 	}
@@ -121,7 +121,7 @@ func (s *CookiePersistenceStore) ExperimentFinish(experiment Experiment, w http.
 		return false, err
 	}
 
-	finishedKey := experiment.Key + ":finished"
+	finishedKey := key + ":finished"
 	_, found := parsedCookieValue[finishedKey]
 
 	parsedCookieValue[finishedKey] = "true"
